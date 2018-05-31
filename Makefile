@@ -1,5 +1,5 @@
 minilua: minilua.c
-	gcc -O3 -o minilua minilua.c -Wall -pedantic
+	gcc -O3 -o minilua minilua.c -Wall
 
 minilua-d: minilua.c
 	gcc -O0 -g -o minilua-d minilua.c -Wall
