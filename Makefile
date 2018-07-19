@@ -1,9 +1,3 @@
-minilua: minilua.c
-	gcc -O3 -o minilua minilua.c -lm -Wall
+minilua: minilua.c common.h parser.h parser.c ir.h ir.c lex.h lex.c state.h rhhm.h string.h rhhm.c string.c value.c value.h
+	gcc -O3 -o minilua value.c parser.c ir.c lex.c rhhm.c string.c minilua.c -lm -Wall
 
-minilua-d: minilua.c
-	gcc -O0 -g -o minilua-d minilua.c -lm -Wall
-
-minilua-m: minilua
-	gcc -Os -o minilua-m minilua.c -Wall -lm -pedantic
-	strip -s --strip-unneeded minilua-m
