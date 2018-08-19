@@ -35,15 +35,34 @@ void lex_init() {
 }
 
 int lex(const char *s, token *t) {
+	int dot = 0;
 	t->s = s;
 	switch(*s++) {
 	case ' ': case '\t': case '\r': case '\n':
 		while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
 		t->type = LEX_BLANKS;
 		break;
+	case '.':
+		dot = 1;
+		if (*s == '.') {
+			t->type = LEX_CAT;
+			break;
+		} else if (!isdigit(*s)) {
+			t->type = '.';
+			break;
+		}
 	case '0': case '1': case '2': case '3': case '4': case '5':
 	case '6': case '7': case '8': case '9':
 		while (isdigit(*s)) s++;
+		if (*s == '.' && !dot) {
+			s++;
+			while (isdigit(*s)) s++;
+		}
+		if (*s == 'e' || *s == 'E') {
+			s++;
+			if (*s == '-' || *s == '+') s++;
+			while (isdigit(*s)) s++;
+		}
 		t->type = LEX_NUM;
 		break;
 	case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
@@ -68,8 +87,6 @@ int lex(const char *s, token *t) {
 			while (*s && *s != '\r' && *s != '\n') s++;
 			t->type = LEX_COMMENT;
 		}
-		break;
-	case '.':
 		break;
 	case '~':
 		if (*s != '=') return 1;

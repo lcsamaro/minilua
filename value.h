@@ -18,6 +18,7 @@ typedef union {
 
 #define bv_nil        UINT64_C(0xfff8000000000000)
 #define bv_bool       UINT64_C(0x7ff9000000000000)
+#define bv_int        UINT64_C(0x7ffa000000000000)
 //                        ...
 #define bv_none       UINT64_C(0xffff000000000000)
 
@@ -45,11 +46,45 @@ void *bv_get_ptr(bv v);
 void *bv_get_ptr_clean(bv v);
 u64 bv_get_u64(bv v);
 
+char *bv_get_sstr(bv *v);
+int bv_get_sstr_len(bv v);
+
 u32 bv_type(bv v);
 
+int bv_is_double(bv v);
 int bv_is_nil(bv v);
 int bv_is_str(bv v);
 int bv_is_sstr(bv v);
+
+
+///// new
+typedef bv value;
+
+u32 value_type(value v);
+
+value  box_double  (double v);
+value  box_bool    (int    v);
+value  box_u64     (i64    v);
+value  box_ptr     (void  *v);
+value  box_nil     ();
+
+#define box_false() box_bool(0)
+#define box_true()  box_bool(1)
+
+double unbox_double(value v);
+int    unbox_bool  (value v);
+u64    unbox_u64   (value v);
+void  *unbox_ptr   (value v);
+
+int    check_double(value v, double *out);
+int    check_bool  (value v, int    *out);
+int    check_u64   (value v, i64    *out);
+int    check_ptr   (value v, void   *out);
+int    check_nil   (value v);
+int    check_none  (value v);
+
+
+/* ops */
 
 i64 bv_fast_cmp(bv a, bv b);
 

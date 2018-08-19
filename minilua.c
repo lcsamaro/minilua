@@ -20,9 +20,14 @@
 #include <sys/mman.h>
 
 #define CC_BLOCK_SZ (1<<14)
-enum cc_reg {
+enum cc_reg_gen {
 	rax = 0, rcx, rdx, rbx, rsp, rbp, rsi, rdi,
-	r8, r9, r10, r11, r12, r13, r14, r15 /* unused */
+	r8, r9, r10, r11, r12, r13, r14, r15
+};
+
+enum cc_reg_xmm {
+	xmm0 = 0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7,
+	xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15
 };
 
 void print_bin(u8 *p, int sz) {
@@ -33,7 +38,6 @@ void print_bin(u8 *p, int sz) {
 	puts("");
 }
 
-//#define CC_MAX_ADDRS 4096
 typedef struct {
 	u8 *s;
 	u8 *p;
@@ -42,9 +46,6 @@ typedef struct {
 
 	void *fill[IR_OP_MAX];
 	int ifill;
-
-	//void *addr[CC_MAX_ADDRS];
-	//void **addrp;
 } cc;
 
 int cc_init(cc *c) {
@@ -52,10 +53,6 @@ int cc_init(cc *c) {
 		PROT_READ | PROT_WRITE,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
 	if (c->s == MAP_FAILED) return 1;
-	//memcpy(c->p, "\x55\x48\x89\xe5", 4); // push rbp / mov rbp, rsp
-	//cc_push(c->p, rbp);
-	//c->p+=4;
-	//c->addrp = c->addr;
 	c->ifill = 0;
 	return 0;
 }
@@ -68,10 +65,8 @@ u8 *cc_cur(cc *c) { return c->p; }
 
 void cc_mark(cc *c, i32 target) {
 	u8 *addr = cc_cur(c);
-	//*(i32*)addr = target;
 	memcpy(addr-4, &target, 4);
 	c->fill[c->ifill++] = addr;
-	printf("marking: %p\n", addr);
 }
 
 void cc_fill_marks(cc *c) {
@@ -79,19 +74,15 @@ void cc_fill_marks(cc *c) {
 		u8 *addr = c->fill[i];
 		i32 target = *(i32*)(addr-4);
 		i32 off = (u8*)c->op_addr[target] - addr;
-
-		printf("subbing %p and %p\n", c->op_addr[target], addr);
-		printf("fill target: %d with %d\n", target, off);
-
 		memcpy(addr-4, &off, 4);
 	}
 }
 
 void* cc_done(cc *c) {
 	printf("gen: %ld bytes\n", c->p - c->s);
-	print_bin(c->s, c->p - c->s);
+	//print_bin(c->s, c->p - c->s);
 
-#if 1
+#if 0
 	FILE *fp = fopen("dump.bin", "wb");
 	fwrite(c->s, 1, c->p-c->s, fp);
 	fclose(fp);
@@ -141,6 +132,44 @@ void cc_mov_rr(cc *c, i32 dest, i32 src) { // :)
 	*c->p++ = MODRM(0x3, src, dest);
 }
 
+void cc_movq_xr(cc *c, i32 dest, i32 src) {
+	*c->p++ = 0x66;
+	*c->p++ = REX(1, src, 0, dest);
+	*c->p++ = 0x0f;
+	*c->p++ = 0x6e;
+
+	dest &= 0x7;
+	src  &= 0x7;
+
+	*c->p++ = MODRM(0x3, dest, src);
+}
+
+void cc_movq_rx(cc *c, i32 dest, i32 src) {
+	*c->p++ = 0x66;
+	*c->p++ = REX(1, src, 0, dest);
+	*c->p++ = 0x0f;
+	*c->p++ = 0x7e;
+
+	dest &= 0x7;
+	src  &= 0x7;
+
+	*c->p++ = MODRM(0x3, src, dest);
+}
+
+void cc_inc_rbx(cc *c, i32 reg) {
+	memcpy(c->p, "\x48\xff\xc3", 3);
+	c->p += 3;
+}
+
+void cc_inc(cc *c, i32 reg) {
+	*c->p++ = REX(1, 0, 0, reg);
+	*c->p++ = 0xff;
+
+	reg  &= 0x7;
+
+	*c->p++ = MODRM(0x3, reg, 0);
+}
+
 #define cc_arg_a(c,v) cc_mov_rl(c, rdi, v)
 #define cc_arg_b(c,v) cc_mov_rl(c, rsi, v)
 
@@ -183,7 +212,6 @@ void cc_call(cc *c, void *f) {
 }
 
 void cc_jmp(cc *c, void *f) {
-	printf("jmp to %p\n", f);
 	*c->p = 0xe9;
 	i32 offset =  (u8*)f - (u8*)(c->p+5);
 	memcpy(c->p+1, &offset, sizeof(i32));
@@ -237,6 +265,7 @@ u8 *cc_skip(cc *c, u32 sz) {
 void cc_leave(cc *c) { *c->p++ = 0xc9; }
 void cc_ret(cc *c) { *c->p++ = 0xc3; }
 
+#define EMIT(mcode) cc_mcode(&c, (u8*)mcode, (sizeof mcode)-1)
 
 /* table */
 typedef struct {
@@ -371,21 +400,89 @@ void lua_error(state *L) {
 }
 
 #define LOAD(fld, reg, keep) \
-	keep = reg; \
+	{ keep = reg; \
 	if (fld < 0) { \
 		if (p.c.ctts[-fld -1].d == 0.0) cc_xor_rr(&c, reg, reg); \
 		else cc_mov_rl(&c, reg, p.c.ctts[-fld -1]); \
 	} else { \
 		int a = assignment[fld]; \
-		if (a >= 0) keep = a; \
-		else { \
-			cc_mov_rs(&c, reg, -a-1); \
+		if (a < 0) { \
+			cc_mov_rs(&c, reg, -a); \
+		} else if (reg != a) { \
+			cc_mov_rr(&c, reg, a); \
 		} \
-	}
+	}}
 
 #define LOAD_A(reg) LOAD(t->a, reg, ra)
 #define LOAD_B(reg) LOAD(t->b, reg, rb)
 //#define LOAD_T(reg) LOAD(t->target, reg, keep)
+
+#define SAVE_RESULT(fld) \
+	{ \
+	int a = assignment[fld]; \
+	if (a >= 0) { \
+		if (a != rax) cc_mov_rr(&c, a, rax); \
+	} else { \
+		cc_store_result(&c, -a); \
+	} }
+
+int cmp(const void* a, const void* b) {
+    const u32 ai = *(const u32*)a;
+    const u32 bi = *(const u32*)b;
+    if (ai < bi) return -1;
+    return ai > bi ? 1 : 0;
+}
+
+int allocate(ir *c, int *assignment) { // allocate registers
+	u32 ini[IR_OP_MAX];
+	u32 end[IR_OP_MAX];
+	for (int i = 0; i < IR_OP_MAX; i++) ini[i] = -1;
+	for (int i = 0; i < IR_OP_MAX; i++) end[i] = -1;
+	for (int i = c->io; i-- > 0; ) {
+		int op = c->ops[i].op;
+		if (op == IR_OP_NOOP) continue;
+		int target = c->ops[i].target;
+		if (!ir_is_jmp(op) && target != IR_NO_TARGET) ini[target] = (i<<16) | target;
+	}
+	for (int i = 0; i < c->io; i++) {
+		int op = c->ops[i].op;
+		if (op == IR_OP_NOOP) continue;
+		int a = c->ops[i].a;
+		int b = c->ops[i].b;
+		int target = c->ops[i].target;
+
+		if (a >= 0 && a != IR_NO_ARG) end[a] = i;
+		if (b >= 0 && b != IR_NO_ARG) end[b] = i;
+	}
+
+	qsort(ini, IR_OP_MAX, sizeof(int), cmp);
+
+	int regs[] = { rbx, rbp, r12, r13, r14, r15 };
+	int scratch[] = { rbx, rbp, r12, r13, r14, r15 };
+	int current[sizeof regs];
+	int used = 0;
+	int spills = 0;
+	for (int i = 0; i < IR_OP_MAX; i++) {
+		if (ini[i] == -1) break;
+
+		int var = ini[i]&0xffff;
+		int var_ini = ini[i]>>16;
+		int var_end = end[var];
+
+		printf("%d: [%d, %d]\n", var, var_ini, var_end);
+
+		if (used < sizeof regs) {
+			current[used] = var;
+			//assignment[var] = -(++spills); //regs[used++];
+			assignment[var] = regs[used++];
+		} else {
+			puts("spill");
+			spills++;
+		}
+	}
+
+	return spills;
+}
 
 void *loadstring(state *L, const char *s) {
 	parser p;
@@ -398,56 +495,16 @@ void *loadstring(state *L, const char *s) {
 	puts("IR:");
 	ir_disp(&p.c);
 
-	ir_phi_elim(&p.c);
-
+	ir_opt(&p.c);
 	puts("IR:");
 	ir_disp(&p.c);
 
-
-	/*******************************************************/
-	/************ register allocation - ini ****************/
+	ir_phi_elim(&p.c);
+	puts("IR:");
+	ir_disp(&p.c);
 
 	int assignment[IR_OP_MAX];
-
-	u16 var_live_end[IR_OP_MAX] = {0}; // last use of var
-	for (int i = 0; i < p.c.io; i++) {
-		int op = p.c.ops[i].op;
-		if (op == IR_OP_NOOP) continue;
-		int a = p.c.ops[i].a;
-		int b = p.c.ops[i].b;
-		int target = p.c.ops[i].target;
-		//var_live_end[target] = i;
-		if (!ir_is_jmp(op) && target != IR_NO_TARGET) var_live_end[target] = i;
-		if (a != IR_NO_ARG) var_live_end[a] = i;
-		if (b != IR_NO_ARG) var_live_end[b] = i;
-	}
-	u16 var_live_ini[IR_OP_MAX]; // first use of var
-	memset(var_live_ini, 0xff, sizeof var_live_ini);
-	for (int i = p.c.io; i-- > 0; ) {
-		int op = p.c.ops[i].op;
-		if (op == IR_OP_NOOP) continue;
-		int target = p.c.ops[i].target;
-		if (!ir_is_jmp(op) && target != IR_NO_TARGET) var_live_ini[target] = i;
-	}
-
-	for (int i = 0; i < p.c.io; i++) {
-		printf("%2d. ", i);
-		for (int j = 0; j < p.c.iv; j++) {
-			if (i >= var_live_ini[j] && i <= var_live_end[j]) {
-				printf("# ");
-			} else {
-				printf("  ");
-			}
-		}
-		printf("\n");
-	}
-
-	return NULL;
-	/************ register allocation - end ****************/
-	/*******************************************************/
-
-
-
+	allocate(&p.c, assignment);
 
 	// assemble
 	int nvars = p.c.iv;
@@ -474,17 +531,17 @@ void *loadstring(state *L, const char *s) {
 
 		switch (t->op) {
 		case IR_OP_DISP:
-			if (t->a < 0) cc_mov_rl(&c, rdi, p.c.ctts[-t->a-1]);
-			else {
-				int a = assignment[t->a];
-				if (a >= 0) cc_mov_rr(&c, rdi, a); // var in register
-				else cc_mov_rs(&c, rdi, a);
-			}
+			LOAD_A(rdi);
 			cc_call(&c, (void*)bv_disp);
 			break;
-		case IR_OP_JE: { // cmp + jmp
-			LOAD_A(rdi);
-			LOAD_B(rsi);
+		case IR_OP_JE: // cmp + jmp
+			ra = -1;
+			if (t->a >= 0) ra = assignment[t->a];
+			if (ra < 0) LOAD_A(rdi);
+
+			rb = -1;
+			if (t->b >= 0) rb = assignment[t->b];
+			if (rb < 0) LOAD_B(rsi);
 
 			cc_cmp_rr(&c, ra, rb);
 
@@ -495,11 +552,28 @@ void *loadstring(state *L, const char *s) {
 				cc_mark(&c, t->target);
 			}
 
-			} break;
+			break;
 		case IR_OP_JNE: // cmp + jmp
+			ra = -1;
+			if (t->a >= 0) ra = assignment[t->a];
+			if (ra < 0) LOAD_A(rdi);
+
+			rb = -1;
+			if (t->b >= 0) rb = assignment[t->b];
+			if (rb < 0) LOAD_B(rsi);
+
+			cc_cmp_rr(&c, ra, rb);
+
+			if (t->target <= i) { // back
+				cc_jnz(&c, c.op_addr[t->target]);
+			} else { // forward
+				cc_jnz(&c, NULL);
+				cc_mark(&c, t->target);
+			}
 
 			break;
 		case IR_OP_JZ:
+			// rax
 			cc_test_lsb(&c);
 			if (t->target <= i) { // back
 				cc_jz(&c, c.op_addr[t->target]);
@@ -509,6 +583,7 @@ void *loadstring(state *L, const char *s) {
 			}
 			break;
 		case IR_OP_JNZ:
+			// rax
 			cc_test_lsb(&c);
 			if (t->target <= i) { // back
 				cc_jnz(&c, c.op_addr[t->target]);
@@ -528,7 +603,7 @@ void *loadstring(state *L, const char *s) {
 		case IR_OP_NEWTBL:
 			cc_mov_rs(&c, rdi, lvar);
 			cc_call(&c, (void*)lua_newtable);
-			cc_store_result(&c, t->target);
+			SAVE_RESULT(t->target);
 			break;
 		case IR_OP_TSTORE:
 			cc_mov_rs(&c, rdi, lvar);
@@ -554,7 +629,7 @@ void *loadstring(state *L, const char *s) {
 
 			cc_call(&c, (void*)lua_getfield);
 
-			cc_store_result(&c, t->target);
+			SAVE_RESULT(t->target);
 			break;
 		case IR_OP_GSTORE:
 			cc_mov_rs(&c, rdi, lvar);
@@ -575,56 +650,63 @@ void *loadstring(state *L, const char *s) {
 
 			cc_call(&c, (void*)lua_getglobal);
 
-			cc_store_result(&c, t->target);
+			SAVE_RESULT(t->target);
 			break;
 		case IR_OP_LCOPY: {
-			int reg = rax;
-			if (assignment[t->target] >= 0) reg = assignment[t->target];
-
-			if (t->a < 0) { // literal
-				if (p.c.ctts[-t->a-1].d == 0.0) cc_xor_rr(&c, reg, reg);
-				else cc_mov_rl(&c, reg, p.c.ctts[-t->a-1]);
+			if (assignment[t->target] >=0) {
+				LOAD_A(assignment[t->target]);
 			} else {
-				int a = assignment[t->a];
-				if (a >= 0) cc_mov_rr(&c, reg, a); // var in register
-				else {
-					cc_mov_rs(&c, reg, a);
-				}
-			}
-			
-			if (assignment[t->target] < 0) {
-				puts("STORE RES");
-				cc_store_result(&c, assignment[t->target]);
+				LOAD_A(rax);
+				SAVE_RESULT(t->target);
 			}
 
 			} break;
 		case IR_OP_INC: case IR_OP_DEC:
-			if (t->a < 0) cc_mov_rl(&c, rdi, p.c.ctts[-t->a-1]);
-			else {
-				int a = assignment[t->a];
-				if (a >= 0) cc_mov_rr(&c, rdi, a); // var in register
-				else cc_mov_rs(&c, rdi, a);
-			}
+				  cc_inc_rbx(&c, 0);
+				  /*
+			LOAD_A(rdi);
 			switch (t->op) {
 			case IR_OP_INC: cc_call(&c, (void*)bv_inc); break;
 			case IR_OP_DEC: cc_call(&c, (void*)bv_dec); break;
 			}
 
-			if (assignment[t->target] >= 0) {
-				cc_mov_rr(&c, assignment[t->target], rax);
-			} else {
-				cc_store_result(&c, assignment[t->target]);
-			}
+			//cc_mov_rr(&c, assignment[t->target], rax);
+			SAVE_RESULT(t->target);
+
+			*/
 			break;
-		case '+': case '*': case '-': case '/': case '^': case '%':
-			puts("gen arith");
-			cc_mov_rs(&c, rdi, lvar);
+		case '+':
+			/*LOAD_A(rdi);
+			LOAD_B(rsi);*/
 
-			if (t->a < 0) cc_mov_rl(&c, rsi, p.c.ctts[-t->a-1]);
-			else cc_mov_rs(&c, rsi, t->a);
+			ra = -1;
+			if (t->a >= 0) ra = assignment[t->a];
+			if (ra < 0) LOAD_A(rdi);
 
-			if (t->b < 0) cc_mov_rl(&c, rdx, p.c.ctts[-t->b-1]);
-			else cc_mov_rs(&c, rdx, t->b);
+			rb = -1;
+			if (t->b >= 0) rb = assignment[t->b];
+			if (rb < 0) LOAD_B(rsi);
+
+			cc_movq_xr(&c, xmm0, ra);
+			cc_movq_xr(&c, xmm1, rb);
+
+			//EMIT("\x66\x48\x0f\x6e\xc7"); // movq xmm0, rdi
+			//EMIT("\x66\x48\x0f\x6e\xce"); // movq xmm1, rsi
+			EMIT("\xf2\x0f\x58\xc1"); // addsd xmm0, xmm1
+
+			if (assignment[t->target] >= 0) {
+				cc_movq_rx(&c, assignment[t->target], xmm0);
+			} else {
+				cc_movq_rx(&c, rax, xmm0);
+				SAVE_RESULT(t->target);
+			}
+
+			break;
+		case '*': case '-': case '/': case '^': case '%':
+			//cc_mov_rs(&c, rdi, lvar);
+
+			LOAD_A(rsi);
+			LOAD_B(rdx);
 
 			switch (t->op) {
 			case '+': cc_call(&c, (void*)bv_add); break;
@@ -635,37 +717,50 @@ void *loadstring(state *L, const char *s) {
 			case '%': cc_call(&c, (void*)bv_mod); break;
 			}
 
-			cc_store_result(&c, t->target);
+			SAVE_RESULT(t->target);
 
 			break;
-		case LEX_EQ: case LEX_NE:
-			puts(" gen LEX EQ");
-			if (t->a < 0) cc_mov_rl(&c, rdi, p.c.ctts[-t->a-1]);
-			else cc_mov_rs(&c, rdi, t->a);
-
-			if (t->b < 0) cc_mov_rl(&c, rsi, p.c.ctts[-t->b-1]);
-			else cc_mov_rs(&c, rsi, t->b);
+		case LEX_NE:
+		case LEX_EQ:
+			LOAD_A(rdi);
+			LOAD_B(rsi);
 
 			switch (t->op) {
 			case LEX_EQ: cc_call(&c, (void*)bv_EQ); break;
 			case LEX_NE: cc_call(&c, (void*)bv_NE); break;
+			case LEX_LE: cc_call(&c, (void*)bv_LE); break;
+			case '<': cc_call(&c, (void*)bv_LT); break;
+			case LEX_GE: cc_call(&c, (void*)bv_GE); break;
+			case '>': cc_call(&c, (void*)bv_GT); break;
 			}
 
-			cc_store_result(&c, t->target);
+			SAVE_RESULT(t->target);
 			break;
 		}
 	}
 	// fill addresses
-	printf(" ** end fill %p\n", cc_cur(&c));
 	c.op_addr[p.c.io] = cc_cur(&c);
 	cc_fill_marks(&c);
 
 	if (nvars) {
 		cc_addrsp(&c, sizeof(bv)*nvars);
 		cc_pop(&c, rbp);
-		//cc_leave(&c);
 	} else cc_pop(&c, rbp);
 	cc_ret(&c);
+	/*cc_movq_xr(&c, xmm0, rax);
+	cc_movq_xr(&c, xmm0, rbx);
+	cc_movq_xr(&c, xmm1, rax);
+	cc_movq_xr(&c, xmm1, rbx);
+	cc_movq_xr(&c, xmm2, rax);
+	cc_movq_xr(&c, xmm2, rbx);
+
+	cc_movq_rx(&c, xmm2, rax);
+	cc_movq_rx(&c, xmm2, rbx);
+	cc_inc(&c, rax);
+	cc_inc(&c, rbx);
+	cc_inc(&c, rdi);
+	cc_inc(&c, r14);
+	cc_inc(&c, r15);*/
 	return cc_done(&c);
 }
 
@@ -679,6 +774,38 @@ int lua_pcall(state *L, void *f) {
 	((fn)f)(L);
 	return 0;
 }
+
+// ffi
+#include <dlfcn.h>
+
+void hellofun() { puts("hello world!"); }
+
+void ffi() {
+	void *handle = dlopen(NULL, RTLD_LAZY);
+	if (!handle) {
+		puts("error");
+		return;
+	}
+	dlerror();
+
+	void (*fn)(void);
+	*(void **) (&fn) = dlsym(handle, "hellofun");
+	if (dlerror()) {
+		puts("error");
+		dlclose(handle);
+		return;
+	}
+
+	(*fn)();
+
+	dlclose(handle);
+}
+
+/*
+ *
+ * ffi('double f(double, double)', 'lib.so')
+ *
+ */
 
 // test
 typedef void* (*thunk)(void);
@@ -713,143 +840,38 @@ i64 test(i64 x, i64 y) {
 	return a[(x+y)%4];
 }
 
+#define PAD_LEFT 2
+#define PAD_RIGHT 1
 int main(int argc, char *argv[]) {
+	ffi();
+
 	lex_init();
+	
+	if (argc < 2) return 0;
+	
+	FILE *f = fopen(argv[1], "rb");
+	if (!f) return 1;
+	fseek(f, 0, SEEK_END);
+	int len = ftell(f);
+	rewind(f);
+	char *b = malloc(PAD_LEFT + len + PAD_RIGHT);
+	if (!b) { fclose(f); return 1; }
+	if (fread(b+PAD_LEFT, 1, len, f) != len) { fclose(f); free(b); return 1; };
+	b[PAD_LEFT+len] = '\0';
+	fclose(f);
+
 	state L;
 	lua_init(&L);
-	/*void *s = loadstring(&L, "local a = 0 a = 1 a = 2 a = 3 a = 4 while a ~= 100000000 do a = a + 0 a = 0 + a "
-			" if a == 1 then disp a end "
-			" a = a + 1 "
-			" end "
-			" repeat "
-			" disp a "
-			" until a ~= 3 "
-			" disp a ");*/
-
-/*
-	loadstring(&L, "  local a = 0 "
-			" local b = 1 "
-			" a = 2 a = 3 a = 5 "
-			" if b > 10 then "
-			"   local xx = 3 "
-			"   a = 3 "
-			"   a = 4 "
-			"   b = 10 "
-			"   a = 4 "
-			"   a = 6 "
-			"   b = 11 "
-			" end "
-			" local c = a ");
-			*/
-	loadstring(&L, "  local a = 0 "
-			" a = 2 "
-			" a = 4 "
-			" local c = a "
-			" if 1 then "
-			"   a = 4 "
-			"   a = 8 "
-			" else   "
-			"   a = 3 "
-			"   a = 4 "
-			"   a = 4 "
-			" end "
-			"  local z =a       "
-			" if 1 then "
-			"   a = 7 "
-			" end "
-			" z = a "
-			" a = 2 "
-			" a = 3 "
-			" z = a "
-			);
-	loadstring(&L, "local a = 0 "
-			" while a ~= 2000 do "
-			"   a = 3 "
-			"   a = a + 1 "
-			" end "
-			" local z = a "
-			" local c = z ");
-	loadstring(&L, " local x =  0 "
-		       	" local a = 0 "
-			" a = 1 "
-			" if 1 then "
-			"   a = 3 "
-			"   if 1 then "
-			"     a = 4 "
-			"   else "
-			"     a = 5 "
-			"   end "
-			" else "
-			"   a = 3 "
-			"   if 1 then "
-			"     a = 4 "
-			"   else "
-			"     a = 4 "
-			"   end "
-			" end "
-			" local z = a "
-			" if 1 then "
-			"   a = 2 "
-			" end "
-			" local xd = a "
-		//	" local c = z "
-			);
-	loadstring(&L, "  local a = 0 "
-			" if 1 then "
-			"   a = 1 "
-			" elseif 2 then "
-			"   a = 2 "
-			" else   "
-			"   a = 3 "
-			" end "
-			" local z =a       "
-			" "
-			" while a > 0 do "
-			"   a = a + 1 "
-			" end "
-			);
-	//loadstring(&L,"local a = 0 while a > 0 do " "   a = a + 1 " " end ");
-
-	//void *s = loadstring(&L, "o = {x=3} o = 4 disp o ");
-	//lua_pcall(&L, s);
-	//lua_pcall(&L, loadstring(&L, "local b = 666 local a = 1 if a == 0 then b = 1000 end disp b "));
-	//lua_pcall(&L, loadstring(&L, " disp 3 "));
-	
-	loadstring(&L, "  local a = 0 "
-			" if 0 then local b = a a = 0 local e = a else  local c = a a = 0 local d = a end "
-			" a = 1 "
-		  	);
-	loadstring(&L, "  local a = 0 "
-			" while a > 10 do if 0 then local b = a a = 0 local e = a else  local c = a a = 0 local d = a end a = 2 + a end "
-			" a = 1 "
-		  	);
 
 
-	loadstring(&L, "  local a = 0 "
-			" while a > 10 do "
-			"    if 1 then a = 0 end "
-			" a = a + 1 end "
-		  	" a = 0 ");
-
-	loadstring(&L, "  local a = 0 "
-			" a = 1 "
-			" a = 1 "
-			" a = 1 "
-		  	" a = 0 ");
-
-	loadstring(&L, "  local a = 0 "
-			" a = 1 "
-			" a = 1 "
-			" if 1 then a = 2 else if 2 then a = 3 else a = 4 end end "
-		  	" local b = a a = 555 local c = a ");
-
-	loadstring(&L, "  local a = 0 "
-			" while a > 10 do if 0 then a = 8 end "
-			" a = a + 1 end "
-		  	" a = 0 ");
+	void *s = loadstring(&L, b+PAD_LEFT);
+	lua_pcall(&L, s);
 	lua_destroy(&L);
+	free(b);
 	
 	printf("parser: %lu KB\n", sizeof(parser)/1024);
+
+	printf("%d\n", 0.0 == 0ULL);
 
 	return 0;
 }

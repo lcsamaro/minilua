@@ -149,6 +149,12 @@ int rhhm_get_str(rhhm *hm, const char *s, int len) {
 	return v.i;
 }
 
+void rhhm_remove_str(rhhm *hm, const char *s, int len) {
+	bv k;
+	k.u = ((u64)len << 48) | (u64)s;
+	rhhm_remove(hm, hm_key_hash, hm_key_cmp, k);
+}
+
 void rhhm_insert_cstr(rhhm *hm, const char *s, int val) {
 	rhhm_insert_str(hm, s, strlen(s), val);
 }

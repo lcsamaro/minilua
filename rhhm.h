@@ -52,6 +52,7 @@ int hm_key_cmp(bv a, bv b);
 u32 hm_key_hash(bv a);
 void rhhm_insert_str(rhhm *hm, const char *s, int len, int val);
 int rhhm_get_str(rhhm *hm, const char *s, int len);
+void rhhm_remove_str(rhhm *hm, const char *s, int len);
 void rhhm_insert_cstr(rhhm *hm, const char *s, int val);
 
 // interning hash impl

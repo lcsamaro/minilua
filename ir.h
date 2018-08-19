@@ -35,6 +35,8 @@ enum {
 
 	IR_OP_DISP, // dbg
 
+
+
 	IR_OP_NOOP
 };
 
@@ -47,6 +49,13 @@ enum {
 	IR_OP_JNE
 };
 
+enum {
+	// loop marks
+	IR_LOOP_HEADER = 1<<12,
+	IR_LOOP_BEGIN,
+};
+
+
 #define IR_NO_ARG (-32768)
 #define IR_NO_TARGET 0xffff 
 #define IR_DEPTH_MAX 128
@@ -56,8 +65,18 @@ enum {
 
 enum {
 	PHI_COND = 0,
+	PHI_DO,
 	PHI_LOOP,
 	PHI_REPEAT
+};
+
+enum {
+	IR_TYPE_NONE = 0,
+	IR_TYPE_ANY,
+	IR_TYPE_NUM,
+	IR_TYPE_INT,
+	IR_TYPE_STR,
+	IR_TYPE_TBL
 };
 
 typedef struct {
@@ -74,9 +93,10 @@ typedef struct {
 	// phi
 	int phi_join_pos[IR_DEPTH_MAX];
 	int phi_join_type[IR_DEPTH_MAX];
-	tac phis[IR_PHI_MAX]; // TODO: use this
 	int iphi;
 	int phidepth;
+
+	u8 types[IR_OP_MAX];
 } ir;
 
 
@@ -95,6 +115,8 @@ int ir_phi_ins(ir *c, int val, int old, u16 *assignment);
 int ir_phi_commit(ir *c, u16 *assignment);
 
 void ir_phi_elim(ir *c);
+
+void ir_opt(ir *c);
 
 void ir_disp(ir *c);
 
