@@ -1,11 +1,9 @@
 #ifndef CC_H
 #define CC_H
 
-#include "common.h"
-#include "ir.h"
-#include "value.h"
+typedef struct ir ir;
 
-#include <stdio.h>
+void *compile(ir *I);
 
 #endif // CC_H
 

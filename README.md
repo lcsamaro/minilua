@@ -1,3 +1,4 @@
 # miniLua
 
-:new_moon: Small Lua implementation
+Small Lua implementation
+

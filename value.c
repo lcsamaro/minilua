@@ -1,5 +1,5 @@
 #include "value.h"
-#include "state.h"
+#include "lapi.h"
 
 #include <math.h>
 #include <string.h>
@@ -16,27 +16,25 @@ bv bv_make_sstr(const char *s, u32 len) {
 	bv v;
 	if (len > SSTR_MAX_LENGTH) len = SSTR_MAX_LENGTH;
 	v.u = bv_sstr | len;
-	memcpy(((char*)&v)+2, s, len);
+	memcpy(((char*)&v)+1, s, len);
 	return v;
 }
 
-
 char *bv_get_sstr(bv *v) {
-	if (bv_is_sstr(*v)) return ((char*)v)+2;
-	return NULL;
+	return bv_is_sstr(*v) ? ((char*)v)+1 : NULL;
 }
 
 int bv_get_sstr_len(bv v) {
-	if (bv_is_sstr(v)) return v.u & 0xf;
-	return 0;
+	return bv_is_sstr(v) ? v.u & 0xf : -66;
 }
 
 
 void *bv_get_ptr(bv v) { return (void*)(v.u & bv_value_mask); }
 void *bv_get_ptr_clean(bv v) { return (void*)(v.u & (bv_value_mask ^ 3)); }
+rhhm *bv_get_tbl(bv v) { return (rhhm*)(v.u & bv_value_mask); }
 u64 bv_get_u64(bv v) { return v.u & bv_value_mask; }
 
-u32 bv_type(bv v) { return v.u >> 48; }
+u64 bv_type(bv v) { return v.u & bv_type_mask; }
 
 int bv_is_double(bv v) {
 	return !isnan(v.d);
@@ -44,6 +42,10 @@ int bv_is_double(bv v) {
 int bv_is_nil(bv v) { return v.u == bv_nil; }
 int bv_is_str(bv v) { return (v.u&bv_type_mask) == bv_str; }
 int bv_is_sstr(bv v) { return (v.u&bv_type_mask) == bv_sstr; }
+
+int bv_is_tbl(bv v) {
+	return (v.u&bv_type_mask) == bv_tbl;
+}
 
 ///// new
 u32 value_type(value v) {
@@ -62,14 +64,10 @@ value box_bool(int v) {
 	return boxed;
 }
 
-value box_u64(i64 v) {
-	value boxed;
-	boxed.i = bv_int | (v ? 1 : 0);
-	return boxed;
-}
-
 value box_ptr(void *v) {
-
+	value boxed;
+	boxed.i = 0;
+	return boxed;
 }
 
 value box_nil() {
@@ -78,54 +76,27 @@ value box_nil() {
 	return boxed;
 }
 
+value box_cfunction(void *v) {
+	bv boxed;
+	boxed.p = v;
+	boxed.u |= bv_cfunction;
+	return boxed;
+}
 
 double unbox_double(value v) {
-
+	return 0.0;
 }
 
 int unbox_bool(value v) {
-
-}
-
-u64 unbox_u64(value v) {
-	return v.u & bv_value_mask;
+	return 0;
 }
 
 void *unbox_ptr(value v) {
-
+	return NULL;
 }
-
-
-int check_double(value v, double *out) {
-
-}
-
-int check_bool(value v, int *out) {
-
-}
-
-int check_u64(value v, i64 *out) {
-
-}
-
-int check_ptr(value v, void *out) {
-
-}
-
-int check_nil(value v) {
-
-}
-
-int check_none(value v) {
-
-}
-
 
 /* ops */
-i64 bv_fast_cmp(bv a, bv b) { return a.i - b.i; }
-
 bv bv_add(state *L, bv a, bv b) {
-	//printf("ADD %.14g %.14g\n", a.d, b.d);
 	bv r = nil;
 	r.d = a.d + b.d;
 	return r;
@@ -179,6 +150,18 @@ bv bv_inc(bv a) { a.d+=1.0; return a; }
 bv bv_dec(bv a) { a.d-=1.0; return a; }
 
 void bv_disp(bv v) {
-	printf("%.14g\n", v.d);
+	switch (bv_type(v)) {
+	case bv_nil: printf("nil"); break;
+	case bv_bool: printf("bool"); break;
+	case bv_str: printf("str"); break;
+	case bv_sstr:
+		printf("%.*s", bv_get_sstr_len(v), bv_get_sstr(&v));
+		break;
+	case bv_tbl: printf("table: %p", v.p); break;
+	case bv_cfunction: printf("cfunction"); break;
+	case bv_closure:
+	case bv_function: printf("function"); break;
+	default: printf("%.14g", v.d);
+	}
 }
 

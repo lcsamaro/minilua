@@ -2,9 +2,9 @@
 #define IR_H
 
 #include "common.h"
-#include "lex.h" // remove lex dep
 #include "value.h"
 #include "rhhm.h"
+#include "vector.h"
 
 typedef struct {
 	i16 op;
@@ -33,9 +33,12 @@ enum {
 
 	//IR_OP_PHI_COPY,
 
+	IR_OP_PARAM,
+	IR_OP_ARG,
+	IR_OP_CALL,
+	IR_OP_RET,
+
 	IR_OP_DISP, // dbg
-
-
 
 	IR_OP_NOOP
 };
@@ -50,9 +53,14 @@ enum {
 };
 
 enum {
+	IR_MARK = 1<<12,
 	// loop marks
-	IR_LOOP_HEADER = 1<<12,
+	IR_LOOP_HEADER,
 	IR_LOOP_BEGIN,
+	IR_LOOP_END,
+
+	IR_FUNCTION_BEGIN,
+	IR_FUNCTION_END
 };
 
 
@@ -70,24 +78,15 @@ enum {
 	PHI_REPEAT
 };
 
-enum {
-	IR_TYPE_NONE = 0,
-	IR_TYPE_ANY,
-	IR_TYPE_NUM,
-	IR_TYPE_INT,
-	IR_TYPE_STR,
-	IR_TYPE_TBL
-};
+vdef(vector_ctt, bv,  IR_CTT_MAX);
+vdef(vector_op,  tac, IR_OP_MAX);
 
-typedef struct {
-	rhhm_value ctt_tbl[IR_CTT_MAX*2];
+typedef struct ir {
 	rhhm ctt_map;
 
-	bv ctts[IR_CTT_MAX];
-	tac ops[IR_OP_MAX];
+	vector_ctt ctts; //bv ctts[IR_CTT_MAX];
+	vector_op   ops; //tac ops[IR_OP_MAX];
 
-	int ic;
-	int io;
 	int iv;
 
 	// phi
@@ -101,10 +100,12 @@ typedef struct {
 
 
 int ir_is_jmp(u32 op);
+int ir_is_mark(u32 op);
 int ir_current(ir *c);
 
 int ir_newvar(ir *c);
-void ir_init(ir *c);
+int ir_init(ir *c);
+void ir_destroy(ir *c);
 int ir_ctt(ir *c, bv v);
 
 int ir_op(ir *c, i16 op, i16 a, i16 b, u16 t);
